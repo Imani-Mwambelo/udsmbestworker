@@ -25,6 +25,15 @@ def create_worker(worker:schemas.Worker, db: Session=Depends(get_db)):
              return new_worker
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"the email already exist, it should be unique")
 
+@router.get("/workers/",response_model=list[schemas.WorkerOut])
+def get_user(db: Session=Depends(get_db)):
+    workers=db.query(models.Worker).all()
+    if workers is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,detail=f"No workkers exist yet")
+        
+    return workers
+
+
 @router.get("/workers/{id}",response_model=schemas.WorkerOut)
 def get_user(id:int, db: Session=Depends(get_db)):
     worker=db.query(models.Worker).filter(models.Worker.id==id).first()
@@ -32,4 +41,5 @@ def get_user(id:int, db: Session=Depends(get_db)):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,detail=f"Worker with id {id} do not exist")
         
     return worker
+
 
