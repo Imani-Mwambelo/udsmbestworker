@@ -43,7 +43,7 @@ class WorkerOut(BaseModel):
     id:int
     email:EmailStr
     category: str
-    department:DepartmentOut
+    department_id:int
 
 class UserLogin(BaseModel):
     email:EmailStr
