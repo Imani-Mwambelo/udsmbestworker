@@ -29,10 +29,11 @@ def verify_access_token(token:str, cridentials_exception):
        id=payload.get("id")
        category=payload.get("category")
        department_id=payload.get("department_id")
+       unit_id=payload.get("unit_id")
 
        if id is None:
             raise cridentials_exception
-       token_data={"id": id, "category": category, "department_id":department_id}
+       token_data={"id": id, "category": category, "department_id":department_id,"unit_id":unit_id}
     except JWSError:
         raise cridentials_exception
     return token_data

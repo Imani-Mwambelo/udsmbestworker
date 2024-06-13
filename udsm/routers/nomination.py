@@ -44,26 +44,33 @@ def ensure_three_nominations(db: Session=Depends(get_db), current_user=Depends(o
 
 # Endpoint to submit nominations
 
-@router.post("/college/{college_name}/department/{department_name}/nominate/", response_model=schemas.Nomination)
-def create_nomination_for_department(
+@router.post("/nominations/", response_model=schemas.Nomination)
+def create_nomination(
     nomination: schemas.Nomination,
     db: Session = Depends(get_db),
     current_user: schemas.CurrentUser = Depends(oauth2.get_current_user)
 ):
-    department = db.query(models.Department).filter(
-        models.Department.id == current_user['department_id']
+    unit=db.query(models.Unit).filter(models.Unit.unit_id==current_user['unit_id']).first()
+    if not unit:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Unit with id {current_user['unit_id']} does not exist")
+    if unit.unit_type is "COLLEGE":
+        department = db.query(models.Department).filter(
+        models.Department.id == current_user['department_id'],
+        models.Department.college_id==current_user['unit_id']
     ).first()
-    
-    if not department:
-        raise HTTPException(status_code=404, detail="Department not found")
+        
+        if not department:
+            raise HTTPException(status_code=404, detail="Department not found")
+        
+        if not db.query(models.Worker).filter(models.Worker.id == nomination.nominee_id, models.Worker.department_id == department.id).first():
+            raise HTTPException(status_code=400, detail="Staff does not belong to the same department")
 
     # Check if the nominated staff belongs to the same department
-    if not db.query(models.Worker).filter(models.Worker.id == nomination.nominee_id, models.Worker.department_id == department.id).first():
-        raise HTTPException(status_code=400, detail="Staff does not belong to the same department")
+    
 
-    nominee = db.query(models.Worker).filter_by(id=nomination.nominee_id).first()
+    nominee = db.query(models.Worker).filter_by(id=nomination.nominee_id, unit_id=current_user['unit_id']).first()
     if not nominee:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Nominee does not exist in this department")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Nominee does not exist in this unit")
 
     # Check if the nominee is of the same category as specified in the nomination
     if nominee.category != nomination.category:
@@ -92,7 +99,8 @@ def commit_nominations(db: Session = Depends(get_db), current_user: schemas.Curr
         db_nomination = models.Nomination(
             **nomination.model_dump(), 
             department_id=current_user['department_id'], 
-            nominator_id=current_user['id']
+            nominator_id=current_user['id'],
+            unit_id=current_user['unit_id']
         )
         db.add(db_nomination)
     db.commit()
@@ -102,10 +110,10 @@ def commit_nominations(db: Session = Depends(get_db), current_user: schemas.Curr
     return my_noms
 
 
-#getting all available nominations
-@router.get("/nominations/")
-def all_nominations(db: Session = Depends(get_db), current_user = Depends(oauth2.get_current_user)):
-    nominations = db.query(models.Nomination).all()
+#getting all available nominations in a unit
+@router.get("/nominations/by-unit/{unit_id}/by-category/{category}")
+def all_nominations(unit_id:int, category:str, db: Session = Depends(get_db), current_user = Depends(oauth2.get_current_user)):
+    nominations = db.query(models.Nomination).filter(models.Nomination.unit_id==unit_id,models.Nomination.category==category).all()
     if not nominations:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No nominations found")
     return nominations
@@ -122,8 +130,8 @@ def my_nominations(nominator_id: int, db: Session = Depends(get_db), current_use
 
 
 #getting a single nomination of a worker using their id and nomination id
-@router.get("/nominations/{nominator_id}/{nomination_id}")
-def my_nomination(nominator_id: int, nomination_id: int, db: Session = Depends(get_db), current_user = Depends(oauth2.get_current_user)):
+@router.get("/nominations/{nomination_id}")
+def my_nomination(nomination_id: int, db: Session = Depends(get_db), current_user = Depends(oauth2.get_current_user)):
     nomination = db.query(models.Nomination).filter_by(nominator_id=current_user['id'], id=nomination_id).first()
     if not nomination:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Nomination not found")
@@ -163,7 +171,7 @@ def update_nomination(id: int, post: schemas.Nomination, db: Session = Depends(g
 
 
 @router.get("/nom_results/{category}")
-def compute_results(category: str, db: Session = Depends(get_db)):
+def compute_results(category: str, db: Session = Depends(get_db), current_user = Depends(oauth2.get_current_user)):
     try:
         # Clear the results table
         db.query(models.Result).delete()
@@ -172,10 +180,14 @@ def compute_results(category: str, db: Session = Depends(get_db)):
         # Handle exception if the table does not exist
         pass
 
+    unit=db.query(models.Unit).filter(models.Unit.unit_id==current_user['unit_id']).first()
+    if not unit:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Unit with id {current_user['unit_id']} does not exist")
+
     # Retrieve the total number of workers who created nominations in the specified category
     total_workers = db.query(models.Nomination)\
                       .join(models.Worker, models.Nomination.nominator_id == models.Worker.id)\
-                      .filter(models.Worker.category == category)\
+                      .filter(models.Worker.category == category, models.Worker.department_id==current_user['department_id'], models.Worker.unit_id==current_user['unit_id'])\
                       .distinct(models.Nomination.nominator_id)\
                       .count()
     print(total_workers)
@@ -189,7 +201,7 @@ def compute_results(category: str, db: Session = Depends(get_db)):
     # Calculate results for each worker in the specified category
     for worker_id, worker_total_points in db.query(models.Nomination.nominee_id, func.sum(models.Nomination.weight))\
                                              .join(models.Worker, models.Nomination.nominee_id == models.Worker.id)\
-                                             .filter(models.Worker.category == category)\
+                                             .filter(models.Worker.category == category, models.Worker.department_id==current_user['department_id'], models.Worker.unit_id==current_user['unit_id'])\
                                              .group_by(models.Nomination.nominee_id)\
                                              .all():
         percentage = round((worker_total_points / overall_total_points) * 100, 2) if overall_total_points != 0 else 0
@@ -199,20 +211,21 @@ def compute_results(category: str, db: Session = Depends(get_db)):
     db.commit()
 
     # Retrieve results along with worker information for the specified category
-    results = db.query(models.Result, models.Worker.email, models.Worker.category)\
+    results = db.query(models.Result, models.Worker.email, models.Worker.category, models.Worker.name)\
                 .join(models.Worker, models.Result.worker_id == models.Worker.id, isouter=True)\
-                .filter(models.Worker.category == category)\
-                .group_by(models.Result.id, models.Result.worker_id, models.Worker.email, models.Worker.category)\
+                .filter(models.Worker.category == category, models.Worker.department_id==current_user['department_id'], models.Worker.unit_id==current_user['unit_id'])\
+                .group_by(models.Result.id, models.Result.worker_id, models.Worker.email, models.Worker.category, models.Worker.name)\
                 .order_by(models.Result.percentage.desc()).limit(3)\
                 .all()
 
     formatted_results = [
         {
+            "name":name,
             "category": worker_category,
             "email": email,
             "percentage": result.percentage,
         } 
-        for result, email, worker_category in results
+        for result,name, email, worker_category in results
     ]
 
     return formatted_results

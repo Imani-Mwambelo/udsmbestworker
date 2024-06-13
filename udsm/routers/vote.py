@@ -23,7 +23,7 @@ def create_vote(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Already voted in this category")
     
     # Check if the votee is valid
-    votee = db.query(models.Worker).filter_by(id=vote.votee_id, category=vote.category).first()
+    votee = db.query(models.Worker).filter_by(id=vote.votee_id, category=vote.category, department_id=current_user['department_id'], unit_id=current_user['unit_id']).first()
     if not votee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Votee is not of {vote.category} category")
     
@@ -35,7 +35,7 @@ def create_vote(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Votee is not eligible to be voted")
     
     # Create and save the new vote
-    new_vote = models.Vote(**vote.model_dump(), voter_id=current_user['id'], department_id=current_user['department_id'])
+    new_vote = models.Vote(**vote.model_dump(), voter_id=current_user['id'], department_id=current_user['department_id'], unit_id=current_user['unit_id'])
     db.add(new_vote)
     db.commit()
     db.refresh(new_vote)
@@ -58,7 +58,7 @@ def get_votes_by_voter(voter_id: int, db: Session = Depends(get_db), current_use
 
 @router.get("/votes/by-category/{category}", response_model=List[schemas.Vote])
 def get_votes_by_category(category: str, db: Session = Depends(get_db), current_user=Depends(oauth2.get_current_user)):
-    votes = db.query(models.Vote).filter_by(category=category).all()
+    votes = db.query(models.Vote).filter_by(category=category, department_id=current_user['department_id'], unit_id=current_user['unit_id']).all()
     if not votes:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No votes found for this category")
     return votes
@@ -99,7 +99,7 @@ def delete_vote(vote_id: int, db: Session = Depends(get_db), current_user=Depend
 
 
 @router.get("/results/{category}")
-def compute_vote_results(category: str, db: Session = Depends(get_db)):
+def compute_vote_results(category: str, db: Session = Depends(get_db), current_user=Depends(oauth2.get_current_user)):
 
     # Step 1: Retrieve the total number of votes in the specified category
     total_votes = db.query(models.Vote).filter(models.Vote.category == category).count()
@@ -113,7 +113,7 @@ def compute_vote_results(category: str, db: Session = Depends(get_db)):
         models.Vote.votee_id, 
         func.count(models.Vote.votee_id).label('total_votee_votes')
     ).filter(
-        models.Vote.category == category
+        models.Vote.category == category, department_id=current_user['department_id'], unit_id=current_user['unit_id']
     ).group_by(
         models.Vote.votee_id
     ).all()

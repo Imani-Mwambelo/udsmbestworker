@@ -1,24 +1,47 @@
+from typing import Optional
 from pydantic import BaseModel, EmailStr, Field
 
 from udsm.models import College
 
-
-class CollegeCreate(BaseModel):
+class UnitCreate(BaseModel):
     name: str
-    dean: str
-
-class CollegeOut(CollegeCreate):
-    id:int
     
 
+class UnitOut(UnitCreate):
+    id: int
+    
+class CollegeCreate(BaseModel):
+    name: str
+    
+
+class CollegeOut(CollegeCreate):
+    id: int
+    
+class InstituteCreate(BaseModel):
+    name: str
+
+
+class InstituteOut(InstituteCreate):
+    id: int
+class SchoolCreate(BaseModel):
+    name: str
+    
+
+class SchoolOut(SchoolCreate):
+    id: int
+        
 
 class DepartmentCreate(BaseModel):
     name: str
-    head_of_department: str
     college_id:int
 
 class DepartmentOut(DepartmentCreate):
+    id:str
     college:CollegeOut
+
+    class Config:
+        orm_mode: True
+
     
 
 class Nomination(BaseModel):
@@ -33,17 +56,25 @@ class Vote(BaseModel):
 
     # Data model for a nomination
 class Worker(BaseModel):
+    name:str
     email:EmailStr
     password:str
     category: str
-    department_id:int
+    unit_id:int
+    department_id:Optional[int]
 
 
 class WorkerOut(BaseModel):
     id:int
     email:EmailStr
+    name:str
     category: str
-    department:DepartmentOut
+    unit_id:int
+    department_id: Optional[int] = None
+
+    class Config:
+        orm_mode: True
+
 
 class UserLogin(BaseModel):
     email:EmailStr
