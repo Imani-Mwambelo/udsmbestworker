@@ -33,6 +33,14 @@ def get_user(db: Session=Depends(get_db)):
         
     return workers
 
+@router.get("/workers/by-category/{category}",response_model=list[schemas.WorkerOut])
+def get_user(category:str, db: Session=Depends(get_db)):
+    workers=db.query(models.Worker).filter(models.Worker.category==category).all()
+    if workers is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,detail=f"No workkers exist yet")
+        
+    return workers
+
 
 @router.get("/workers/{id}",response_model=schemas.WorkerOut)
 def get_user(id:int, db: Session=Depends(get_db)):
