@@ -28,7 +28,8 @@ def create_vote(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Votee is not of {vote.category} category")
     
     # Compute results to get top workers in the category
-    top_workers = compute_results(db=db, category=vote.category)
+    top_workers = compute_results(db=db, category=vote.category, current_user=current_user)
+    print(top_workers)
     
     # Ensure the votee is among the top workers
     if not any(result['email'] == votee.email for result in top_workers):
@@ -74,7 +75,7 @@ def update_vote(vote_id: int, vote: schemas.Vote, db: Session = Depends(get_db),
     if not votee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Votee is not of {vote.category} category")
     
-    top_workers = compute_results(db=db, category=vote.category)
+    top_workers = compute_results(db=db, category=vote.category, current_user=current_user)
     if not any(result['email'] == votee.email for result in top_workers):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Votee is not eligible to be voted")
 
@@ -100,6 +101,13 @@ def delete_vote(vote_id: int, db: Session = Depends(get_db), current_user=Depend
 
 @router.get("/results/{category}")
 def compute_vote_results(category: str, db: Session = Depends(get_db), current_user=Depends(oauth2.get_current_user)):
+    try:
+        # Clear the results table
+        db.query(models.VoteResult).delete()
+        db.commit()
+    except OperationalError:
+        # Handle exception if the table does not exist
+        pass
 
     # Step 1: Retrieve the total number of votes in the specified category
     total_votes = db.query(models.Vote).filter(models.Vote.category == category).count()
@@ -113,15 +121,16 @@ def compute_vote_results(category: str, db: Session = Depends(get_db), current_u
         models.Vote.votee_id, 
         func.count(models.Vote.votee_id).label('total_votee_votes')
     ).filter(
-        models.Vote.category == category, department_id=current_user['department_id'], unit_id=current_user['unit_id']
+        models.Vote.category == category
     ).group_by(
         models.Vote.votee_id
     ).all()
+    
 
     for votee_id, total_votee_votes in vote_counts:
         # Calculate percentage for the worker
         percentage = round((total_votee_votes / total_votes) * 100, 2)
-
+        
         # Store the result in the database
         db_result = models.VoteResult(worker_id=votee_id, percentage=percentage)
         db.add(db_result)
@@ -132,18 +141,23 @@ def compute_vote_results(category: str, db: Session = Depends(get_db), current_u
     results = db.query(
         models.VoteResult, 
         models.Worker.email, 
-        models.Worker.category
+        models.Worker.category,
+        models.Worker.name
     ).join(
         models.Worker, 
         models.VoteResult.worker_id == models.Worker.id, 
         isouter=True
     ).filter(
-        models.Worker.category == category
+        models.Worker.category == category,
+        models.Worker.department_id==current_user['department_id'],
+        models.Worker.unit_id==current_user['unit_id']
+        
     ).group_by(
         models.VoteResult.id, 
         models.VoteResult.worker_id, 
         models.Worker.email, 
-        models.Worker.category
+        models.Worker.category,
+        models.Worker.name
     ).order_by(
         models.VoteResult.percentage.desc()
     ).all()
@@ -151,11 +165,12 @@ def compute_vote_results(category: str, db: Session = Depends(get_db), current_u
     # Format results into a structured format
     formatted_results = [
         {
+            "name":name,
             "category": worker_category,
             "email": email,
             "percentage": result.percentage,
         } 
-        for result, email, worker_category in results
+        for result, email, worker_category, name in results
     ]
 
     return formatted_results

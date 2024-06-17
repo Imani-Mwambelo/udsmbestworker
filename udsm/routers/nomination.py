@@ -1,48 +1,47 @@
 
 from fastapi import APIRouter, FastAPI, HTTPException, Depends, status
 from sqlalchemy.exc import OperationalError
-from sqlalchemy import func
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Dict
 from .. import models, schemas
+from sqlalchemy import func
 from udsm.authentication import oauth2
-from ..database import get_db, engine
-from sqlalchemy.exc import OperationalError
+from ..database import get_db
 
-router=APIRouter(tags=['Nominations'])
-
+router = APIRouter(tags=['Nominations'])
 
 
 class NominationsStaging:
     def __init__(self):
-        self.nominations = []
+        self.user_nominations: Dict[str, List[schemas.Nomination]] = {}
 
-    def stage_nomination(self, nomination: schemas.Nomination):
-        if len(self.nominations) < 3:
-            self.nominations.append(nomination)
+    def stage_nomination(self, user_id: str, nomination: schemas.Nomination):
+        if user_id not in self.user_nominations:
+            self.user_nominations[user_id] = []
+
+        if len(self.user_nominations[user_id]) < 3:
+            self.user_nominations[user_id].append(nomination)
         else:
             raise HTTPException(status_code=400, detail="You can only stage three nominations")
 
-    def get_staged_nominations(self) -> List[schemas.Nomination]:
-        return self.nominations
+    def get_staged_nominations(self, user_id: str) -> List[schemas.Nomination]:
+        return self.user_nominations.get(user_id, [])
 
-    def clear_staged_nominations(self):
-        self.nominations = []
+    def clear_staged_nominations(self, user_id: str):
+        if user_id in self.user_nominations:
+            self.user_nominations[user_id] = []
 
 # Create an instance of the staging class
 nominations_staging = NominationsStaging()
 
 
-
-def ensure_three_nominations(db: Session=Depends(get_db), current_user=Depends(oauth2.get_current_user)):
-    # Check the number of nominations created by the worker
+def ensure_three_nominations(db: Session = Depends(get_db), current_user = Depends(oauth2.get_current_user)):
     worker_nominations_count = db.query(models.Nomination).filter(
         models.Nomination.nominator_id == current_user['id']
     ).count()
     if worker_nominations_count != 3:
         raise HTTPException(status_code=400, detail="You must create exactly three nominations")
 
-# Endpoint to submit nominations
 
 @router.post("/nominations/", response_model=schemas.Nomination)
 def create_nomination(
@@ -50,51 +49,45 @@ def create_nomination(
     db: Session = Depends(get_db),
     current_user: schemas.CurrentUser = Depends(oauth2.get_current_user)
 ):
-    unit=db.query(models.Unit).filter(models.Unit.unit_id==current_user['unit_id']).first()
+    unit = db.query(models.Unit).filter(models.Unit.unit_id == current_user['unit_id']).first()
     if not unit:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Unit with id {current_user['unit_id']} does not exist")
-    if unit.unit_type is "COLLEGE":
+
+    if unit.unit_type == "COLLEGE":
         department = db.query(models.Department).filter(
-        models.Department.id == current_user['department_id'],
-        models.Department.college_id==current_user['unit_id']
-    ).first()
-        
+            models.Department.id == current_user['department_id'],
+            models.Department.college_id == current_user['unit_id']
+        ).first()
+
         if not department:
             raise HTTPException(status_code=404, detail="Department not found")
-        
+
         if not db.query(models.Worker).filter(models.Worker.id == nomination.nominee_id, models.Worker.department_id == department.id).first():
             raise HTTPException(status_code=400, detail="Staff does not belong to the same department")
-
-    # Check if the nominated staff belongs to the same department
-    
 
     nominee = db.query(models.Worker).filter_by(id=nomination.nominee_id, unit_id=current_user['unit_id']).first()
     if not nominee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Nominee does not exist in this unit")
 
-    # Check if the nominee is of the same category as specified in the nomination
     if nominee.category != nomination.category:
         raise HTTPException(status_code=400, detail=f"Nominee is not of {nomination.category} category")
 
-    # Check for existing staged nominations
-    for staged_nomination in nominations_staging.get_staged_nominations():
+    for staged_nomination in nominations_staging.get_staged_nominations(current_user['id']):
         if staged_nomination.nominee_id == nomination.nominee_id:
             raise HTTPException(status_code=400, detail="You have already nominated this candidate")
         if staged_nomination.weight == nomination.weight:
             raise HTTPException(status_code=400, detail="You can't nominate two candidates with the same weight")
 
-    # Stage the nomination
-    nominations_staging.stage_nomination(nomination)
+    nominations_staging.stage_nomination(current_user['id'], nomination)
     return nomination
 
 
 @router.post("/commit-nominations/", response_model=List[schemas.Nomination])
 def commit_nominations(db: Session = Depends(get_db), current_user: schemas.CurrentUser = Depends(oauth2.get_current_user)):
-    staged_nominations = nominations_staging.get_staged_nominations()
+    staged_nominations = nominations_staging.get_staged_nominations(current_user['id'])
     if len(staged_nominations) != 3:
         raise HTTPException(status_code=400, detail="You must stage exactly three nominations")
 
-    # Commit staged nominations to the database
     for nomination in staged_nominations:
         db_nomination = models.Nomination(
             **nomination.model_dump(), 
@@ -105,7 +98,7 @@ def commit_nominations(db: Session = Depends(get_db), current_user: schemas.Curr
         db.add(db_nomination)
     db.commit()
     
-    nominations_staging.clear_staged_nominations()
+    nominations_staging.clear_staged_nominations(current_user['id'])
     my_noms = db.query(models.Nomination).filter(models.Nomination.nominator_id == current_user['id']).all()
     return my_noms
 
@@ -225,7 +218,7 @@ def compute_results(category: str, db: Session = Depends(get_db), current_user =
             "email": email,
             "percentage": result.percentage,
         } 
-        for result,name, email, worker_category in results
+        for result, email, worker_category,name in results
     ]
 
     return formatted_results
