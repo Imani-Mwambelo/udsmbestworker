@@ -85,6 +85,9 @@ def create_nomination(
 @router.post("/commit-nominations/", response_model=List[schemas.Nomination])
 def commit_nominations(db: Session = Depends(get_db), current_user: schemas.CurrentUser = Depends(oauth2.get_current_user)):
     staged_nominations = nominations_staging.get_staged_nominations(current_user['id'])
+    nom_exists=db.query(models.Nomination).filter(models.Nomination.nominator_id==current_user['id'], models.Nomination.category==staged_nominations[0].category).first()
+    if nom_exists != None:
+        raise HTTPException(status_code=status.HTTP_302_FOUND, detail="You have already nominated in this category")
     if len(staged_nominations) != 3:
         raise HTTPException(status_code=400, detail="You must stage exactly three nominations")
 
@@ -95,6 +98,7 @@ def commit_nominations(db: Session = Depends(get_db), current_user: schemas.Curr
             nominator_id=current_user['id'],
             unit_id=current_user['unit_id']
         )
+
         db.add(db_nomination)
     db.commit()
     
