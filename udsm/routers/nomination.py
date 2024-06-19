@@ -75,7 +75,7 @@ def create_nomination(
     for staged_nomination in nominations_staging.get_staged_nominations(current_user['id']):
         if staged_nomination.nominee_id == nomination.nominee_id:
             raise HTTPException(status_code=400, detail="You have already nominated this candidate")
-        if staged_nomination.weight == nomination.weight:
+        if staged_nomination.weight == nomination.weight and staged_nomination.category==nomination.category:
             raise HTTPException(status_code=400, detail="You can't nominate two candidates with the same weight")
 
     nominations_staging.stage_nomination(current_user['id'], nomination)
