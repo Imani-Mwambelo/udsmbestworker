@@ -83,25 +83,41 @@ def create_nomination(
 
 
 @router.post("/commit-nominations/", response_model=List[schemas.Nomination])
-def commit_nominations(db: Session = Depends(get_db), current_user: schemas.CurrentUser = Depends(oauth2.get_current_user)):
+def commit_nominations(
+    db: Session = Depends(get_db), 
+    current_user: schemas.CurrentUser = Depends(oauth2.get_current_user)
+):
     staged_nominations = nominations_staging.get_staged_nominations(current_user['id'])
-    nom_exists=db.query(models.Nomination).filter(models.Nomination.nominator_id==current_user['id'], models.Nomination.category==staged_nominations[0].category).first()
-    if nom_exists != None:
-        raise HTTPException(status_code=status.HTTP_302_FOUND, detail="You have already nominated in this category")
+    
+    # Check if the user already has nominations in any of the categories they are trying to nominate
+    for staged_nomination in staged_nominations:
+        nom_exists = db.query(models.Nomination).filter(
+            models.Nomination.nominator_id == current_user['id'],
+            models.Nomination.category == staged_nomination.category
+        ).first()
+        if nom_exists:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, 
+                detail=f"You have already nominated in the {staged_nomination.category} category"
+            )
+
     if len(staged_nominations) != 3:
         raise HTTPException(status_code=400, detail="You must stage exactly three nominations")
 
-    for nomination in staged_nominations:
-        db_nomination = models.Nomination(
-            **nomination.model_dump(), 
-            department_id=current_user['department_id'], 
-            nominator_id=current_user['id'],
-            unit_id=current_user['unit_id']
-        )
-
-        db.add(db_nomination)
-    db.commit()
-    
+    try:
+        for nomination in staged_nominations:
+            db_nomination = models.Nomination(
+                **nomination.model_dump(), 
+                department_id=current_user['department_id'], 
+                nominator_id=current_user['id'],
+                unit_id=current_user['unit_id']
+            )
+            db.add(db_nomination)
+        
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="An error occurred while committing nominations")
     nominations_staging.clear_staged_nominations(current_user['id'])
     my_noms = db.query(models.Nomination).filter(models.Nomination.nominator_id == current_user['id']).all()
     return my_noms
