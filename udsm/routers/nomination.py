@@ -19,10 +19,13 @@ class NominationsStaging:
         if user_id not in self.user_nominations:
             self.user_nominations[user_id] = []
 
-        if len(self.user_nominations[user_id]) < 3:
+        # Count nominations for the same category
+        category_count = sum(1 for nom in self.user_nominations[user_id] if nom.category == nomination.category)
+
+        if category_count < 3:
             self.user_nominations[user_id].append(nomination)
         else:
-            raise HTTPException(status_code=400, detail="You can only stage three nominations")
+            raise HTTPException(status_code=400, detail="You can only stage three nominations per category")
 
     def get_staged_nominations(self, user_id: str) -> List[schemas.Nomination]:
         return self.user_nominations.get(user_id, [])
@@ -100,6 +103,7 @@ def commit_nominations(
                 status_code=status.HTTP_409_CONFLICT, 
                 detail=f"You have already nominated in the {staged_nomination.category} category"
             )
+        nominations_staging.clear_staged_nominations(current_user['id'])
 
     if len(staged_nominations) != 3:
         raise HTTPException(status_code=400, detail="You must stage exactly three nominations")
@@ -186,37 +190,51 @@ def update_nomination(id: int, post: schemas.Nomination, db: Session = Depends(g
 @router.get("/nom_results/{category}")
 def compute_results(category: str, db: Session = Depends(get_db), current_user = Depends(oauth2.get_current_user)):
     try:
-        # Clear the results table
-        db.query(models.Result).delete()
+        # Delete results only for the specified category and user's unit and department
+        db.query(models.Result).filter(models.Result.worker_id.in_(
+            db.query(models.Worker.id)
+            .filter(
+                models.Worker.category == category,
+                models.Worker.department_id == current_user['department_id'],
+                models.Worker.unit_id == current_user['unit_id']
+            )
+        )).delete(synchronize_session=False)
         db.commit()
     except OperationalError:
-        # Handle exception if the table does not exist
         pass
 
-    unit=db.query(models.Unit).filter(models.Unit.unit_id==current_user['unit_id']).first()
+    unit = db.query(models.Unit).filter(models.Unit.unit_id == current_user['unit_id']).first()
     if not unit:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Unit with id {current_user['unit_id']} does not exist")
 
-    # Retrieve the total number of workers who created nominations in the specified category
+    # Count total distinct workers who have created nominations in the specified category
     total_workers = db.query(models.Nomination)\
                       .join(models.Worker, models.Nomination.nominator_id == models.Worker.id)\
-                      .filter(models.Worker.category == category, models.Worker.department_id==current_user['department_id'], models.Worker.unit_id==current_user['unit_id'])\
+                      .filter(
+                          models.Nomination.category == category,
+                          models.Worker.department_id == current_user['department_id'],
+                          models.Worker.unit_id == current_user['unit_id']
+                      )\
                       .distinct(models.Nomination.nominator_id)\
                       .count()
-    print(total_workers)
 
     if total_workers == 0:
         raise HTTPException(status_code=400, detail="No nominations found for the specified category")
 
-    # Calculate the overall total points for the specified category
     overall_total_points = 6 * total_workers
 
     # Calculate results for each worker in the specified category
-    for worker_id, worker_total_points in db.query(models.Nomination.nominee_id, func.sum(models.Nomination.weight))\
-                                             .join(models.Worker, models.Nomination.nominee_id == models.Worker.id)\
-                                             .filter(models.Worker.category == category, models.Worker.department_id==current_user['department_id'], models.Worker.unit_id==current_user['unit_id'])\
-                                             .group_by(models.Nomination.nominee_id)\
-                                             .all():
+    worker_results = db.query(models.Nomination.nominee_id, func.sum(models.Nomination.weight).label('total_points'))\
+                       .join(models.Worker, models.Nomination.nominee_id == models.Worker.id)\
+                       .filter(
+                           models.Worker.category == category,
+                           models.Worker.department_id == current_user['department_id'],
+                           models.Worker.unit_id == current_user['unit_id']
+                       )\
+                       .group_by(models.Nomination.nominee_id)\
+                       .all()
+
+    for worker_id, worker_total_points in worker_results:
         percentage = round((worker_total_points / overall_total_points) * 100, 2) if overall_total_points != 0 else 0
         db_result = models.Result(worker_id=worker_id, percentage=percentage)
         db.add(db_result)
@@ -224,25 +242,29 @@ def compute_results(category: str, db: Session = Depends(get_db), current_user =
     db.commit()
 
     # Retrieve results along with worker information for the specified category
-    results = db.query(models.Result, models.Worker.email, models.Worker.category, models.Worker.name)\
+    results = db.query(models.Result,models.Worker.id, models.Worker.email, models.Worker.category, models.Worker.name)\
                 .join(models.Worker, models.Result.worker_id == models.Worker.id, isouter=True)\
-                .filter(models.Worker.category == category, models.Worker.department_id==current_user['department_id'], models.Worker.unit_id==current_user['unit_id'])\
-                .group_by(models.Result.id, models.Result.worker_id, models.Worker.email, models.Worker.category, models.Worker.name)\
+                .filter(
+                    models.Worker.category == category,
+                    models.Worker.department_id == current_user['department_id'],
+                    models.Worker.unit_id == current_user['unit_id']
+                )\
+                .group_by(models.Result.id, models.Result.worker_id,models.Result,models.Worker.id, models.Worker.email, models.Worker.category, models.Worker.name)\
                 .order_by(models.Result.percentage.desc()).limit(3)\
                 .all()
 
     formatted_results = [
         {
-            "name":name,
+            "id":id,
+            "name": name,
             "category": worker_category,
             "email": email,
             "percentage": result.percentage,
-        } 
-        for result, email, worker_category,name in results
+        }
+        for result,id, email, worker_category, name in results
     ]
 
     return formatted_results
-
 
 
 

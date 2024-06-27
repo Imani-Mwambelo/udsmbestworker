@@ -53,6 +53,10 @@ class Vote(BaseModel):
     category: str
     votee_id: int
 
+class VoteOut(Vote):
+    voter_id: int
+    id:int
+
 
     # Data model for a nomination
 class Worker(BaseModel):

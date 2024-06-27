@@ -42,14 +42,14 @@ def create_vote(
     db.refresh(new_vote)
     return new_vote
 
-@router.get("/votes/", response_model=List[schemas.Vote])
+@router.get("/votes/", response_model=List[schemas.VoteOut])
 def get_votes(db: Session = Depends(get_db), current_user=Depends(oauth2.get_current_user)):
     votes = db.query(models.Vote).all()
     if not votes:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No votes found")
     return votes
 
-@router.get("/votes/by-voter/{voter_id}", response_model=List[schemas.Vote])
+@router.get("/votes/by-voter/{voter_id}", response_model=List[schemas.VoteOut])
 def get_votes_by_voter(voter_id: int, db: Session = Depends(get_db), current_user=Depends(oauth2.get_current_user)):
     votes = db.query(models.Vote).filter_by(voter_id=voter_id).all()
     if not votes:
@@ -57,7 +57,7 @@ def get_votes_by_voter(voter_id: int, db: Session = Depends(get_db), current_use
     return votes
 
 
-@router.get("/votes/by-category/{category}", response_model=List[schemas.Vote])
+@router.get("/votes/by-category/{category}", response_model=List[schemas.VoteOut])
 def get_votes_by_category(category: str, db: Session = Depends(get_db), current_user=Depends(oauth2.get_current_user)):
     votes = db.query(models.Vote).filter_by(category=category, department_id=current_user['department_id'], unit_id=current_user['unit_id']).all()
     if not votes:
@@ -98,9 +98,8 @@ def delete_vote(vote_id: int, db: Session = Depends(get_db), current_user=Depend
 
 
 
-
-@router.get("/results/{category}")
-def compute_vote_results(category: str, db: Session = Depends(get_db), current_user=Depends(oauth2.get_current_user)):
+@router.get("/results")
+def compute_vote_results(db: Session = Depends(get_db), current_user=Depends(oauth2.get_current_user)):
     try:
         # Clear the results table
         db.query(models.VoteResult).delete()
@@ -109,69 +108,78 @@ def compute_vote_results(category: str, db: Session = Depends(get_db), current_u
         # Handle exception if the table does not exist
         pass
 
-    # Step 1: Retrieve the total number of votes in the specified category
-    total_votes = db.query(models.Vote).filter(models.Vote.category == category).count()
-    print(total_votes)
+    categories = ["junior", "senior", "administrative"]
+    formatted_results = []
 
-    if total_votes == 0:
-        return {"message": "No votes found in the specified category"}
+    for category in categories:
+        # Step 1: Retrieve the total number of votes in the specified category
+        total_votes = db.query(models.Vote).filter(models.Vote.category == category).count()
+        print(total_votes)
 
-    # Step 3: Calculate results for each worker in the specified category
-    vote_counts = db.query(
-        models.Vote.votee_id, 
-        func.count(models.Vote.votee_id).label('total_votee_votes')
-    ).filter(
-        models.Vote.category == category
-    ).group_by(
-        models.Vote.votee_id
-    ).all()
-    
+        if total_votes == 0:
+            formatted_results.append({
+                "category": category,
+                "message": "No votes found in this category"
+            })
+            continue
 
-    for votee_id, total_votee_votes in vote_counts:
-        # Calculate percentage for the worker
-        percentage = round((total_votee_votes / total_votes) * 100, 2)
+        # Step 3: Calculate results for each worker in the specified category
+        vote_counts = db.query(
+            models.Vote.votee_id, 
+            func.count(models.Vote.votee_id).label('total_votee_votes')
+        ).filter(
+            models.Vote.category == category
+        ).group_by(
+            models.Vote.votee_id
+        ).all()
         
-        # Store the result in the database
-        db_result = models.VoteResult(worker_id=votee_id, percentage=percentage)
-        db.add(db_result)
+        for votee_id, total_votee_votes in vote_counts:
+            # Calculate percentage for the worker
+            percentage = round((total_votee_votes / total_votes) * 100, 2)
+            
+            # Store the result in the database
+            db_result = models.VoteResult(worker_id=votee_id, percentage=percentage)
+            db.add(db_result)
 
-    db.commit()
+        db.commit()
 
-    # Step 4: Retrieve results along with worker information for the specified category
-    results = db.query(
-        models.VoteResult, 
-        models.Worker.email, 
-        models.Worker.category,
-        models.Worker.name
-    ).join(
-        models.Worker, 
-        models.VoteResult.worker_id == models.Worker.id, 
-        isouter=True
-    ).filter(
-        models.Worker.category == category,
-        models.Worker.department_id==current_user['department_id'],
-        models.Worker.unit_id==current_user['unit_id']
-        
-    ).group_by(
-        models.VoteResult.id, 
-        models.VoteResult.worker_id, 
-        models.Worker.email, 
-        models.Worker.category,
-        models.Worker.name
-    ).order_by(
-        models.VoteResult.percentage.desc()
-    ).all()
+        # Step 4: Retrieve results along with worker information for the specified category
+        results = db.query(
+            models.VoteResult, 
+            models.Worker.email, 
+            models.Worker.category,
+            models.Worker.name
+        ).join(
+            models.Worker, 
+            models.VoteResult.worker_id == models.Worker.id, 
+            isouter=True
+        ).filter(
+            models.Worker.category == category,
+           
+            models.Worker.unit_id == current_user['unit_id']
+        ).group_by(
+            models.VoteResult.id, 
+            models.VoteResult.worker_id, 
+            models.Worker.email, 
+            models.Worker.category,
+            models.Worker.name
+        ).order_by(
+            models.VoteResult.percentage.desc()
+        ).all()
 
-    # Format results into a structured format
-    formatted_results = [
-        {
-            "name":name,
-            "category": worker_category,
-            "email": email,
-            "percentage": result.percentage,
-        } 
-        for result, email, worker_category, name in results
-    ]
+        # Append the winner to the formatted results
+        if results:
+            result, email, worker_category, name = results[0]
+            formatted_results.append({
+                "name": name,
+                "category": worker_category,
+                "email": email,
+                "percentage": result.percentage,
+            })
+        else:
+            formatted_results.append({
+                "category": category,
+                "message": "No results found in this category"
+            })
 
     return formatted_results
-

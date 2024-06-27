@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from typing import List
 from . import models, schemas
 from .database import get_db, engine
-from .routers import college, nomination, worker, department, vote, school, institute, college
+from .routers import college, nomination, worker, department, vote, school, institute, college, results
 from .authentication import auth
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -34,6 +34,7 @@ app.include_router(vote.router)
 app.include_router(college.router)
 app.include_router(institute.router)
 app.include_router(school.router)
+app.include_router(results.router)
 
 
 
