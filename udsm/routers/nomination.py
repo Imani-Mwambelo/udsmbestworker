@@ -3,7 +3,7 @@ from fastapi import APIRouter, FastAPI, HTTPException, Depends, status
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 from typing import List, Dict
-from .. import models, schemas
+from .. import models, schemas, dependencies
 from sqlalchemy import func
 from udsm.authentication import oauth2
 from ..database import get_db
@@ -52,6 +52,7 @@ def create_nomination(
     db: Session = Depends(get_db),
     current_user: schemas.CurrentUser = Depends(oauth2.get_current_user)
 ):
+    dependencies.check_nomination_period(db=db)
     unit = db.query(models.Unit).filter(models.Unit.unit_id == current_user['unit_id']).first()
     if not unit:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Unit with id {current_user['unit_id']} does not exist")
@@ -90,6 +91,7 @@ def commit_nominations(
     db: Session = Depends(get_db), 
     current_user: schemas.CurrentUser = Depends(oauth2.get_current_user)
 ):
+    dependencies.check_nomination_period(db=db)
     staged_nominations = nominations_staging.get_staged_nominations(current_user['id'])
     
     # Check if the user already has nominations in any of the categories they are trying to nominate
@@ -189,6 +191,7 @@ def update_nomination(id: int, post: schemas.Nomination, db: Session = Depends(g
 
 @router.get("/nom_results/{category}")
 def compute_results(category: str, db: Session = Depends(get_db), current_user = Depends(oauth2.get_current_user)):
+    dependencies.check_nom_result_release_period(db=db)
     try:
         # Delete results only for the specified category and user's unit and department
         db.query(models.Result).filter(models.Result.worker_id.in_(
@@ -268,6 +271,99 @@ def compute_results(category: str, db: Session = Depends(get_db), current_user =
 
 
 
+@router.get("/nomination_results/all")
+def get_all_results(db: Session = Depends(get_db), current_user = Depends(oauth2.get_current_user)):
+    dependencies.check_nom_result_release_period(db=db)
+    categories = ["junior", "senior", "administrative"]
+    all_results = []
+
+    for category in categories:
+        try:
+            # Delete results only for the specified category and user's unit and department
+            db.query(models.Result).filter(models.Result.worker_id.in_(
+                db.query(models.Worker.id)
+                .filter(
+                    models.Worker.category == category,
+                    models.Worker.department_id == current_user['department_id'],
+                    models.Worker.unit_id == current_user['unit_id']
+                )
+            )).delete(synchronize_session=False)
+            db.commit()
+        except OperationalError:
+            pass
+
+        unit = db.query(models.Unit).filter(models.Unit.unit_id == current_user['unit_id']).first()
+        if not unit:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Unit with id {current_user['unit_id']} does not exist")
+
+        # Count total distinct workers who have created nominations in the specified category
+        total_workers = db.query(models.Nomination)\
+                          .join(models.Worker, models.Nomination.nominator_id == models.Worker.id)\
+                          .filter(
+                              models.Nomination.category == category,
+                              models.Worker.department_id == current_user['department_id'],
+                              models.Worker.unit_id == current_user['unit_id']
+                          )\
+                          .distinct(models.Nomination.nominator_id)\
+                          .count()
+
+        print(f"Total workers for category '{category}': {total_workers}")  # Logging
+
+        if total_workers == 0:
+            all_results.append({
+                "category": category,
+                "message": f"Nomination results for the {category} category are not ready."
+            })
+            continue
+
+        overall_total_points = 6 * total_workers
+
+        # Calculate results for each worker in the specified category
+        worker_results = db.query(models.Nomination.nominee_id, func.sum(models.Nomination.weight).label('total_points'))\
+                           .join(models.Worker, models.Nomination.nominee_id == models.Worker.id)\
+                           .filter(
+                               models.Worker.category == category,
+                               models.Worker.department_id == current_user['department_id'],
+                               models.Worker.unit_id == current_user['unit_id']
+                           )\
+                           .group_by(models.Nomination.nominee_id)\
+                           .all()
+
+        for worker_id, worker_total_points in worker_results:
+            percentage = round((worker_total_points / overall_total_points) * 100, 2) if overall_total_points != 0 else 0
+            db_result = models.Result(worker_id=worker_id, percentage=percentage)
+            db.add(db_result)
+
+        db.commit()
+
+        # Retrieve results along with worker information for the specified category
+        results = db.query(models.Result, models.Worker.id, models.Worker.email, models.Worker.category, models.Worker.name)\
+                    .join(models.Worker, models.Result.worker_id == models.Worker.id, isouter=True)\
+                    .filter(
+                        models.Worker.category == category,
+                        models.Worker.department_id == current_user['department_id'],
+                        models.Worker.unit_id == current_user['unit_id']
+                    )\
+                    .group_by(models.Result.id, models.Result.worker_id, models.Result, models.Worker.id, models.Worker.email, models.Worker.category, models.Worker.name)\
+                    .order_by(models.Result.percentage.desc()).limit(3)\
+                    .all()
+
+        formatted_results = [
+            {
+                "id": id,
+                "name": name,
+                "category": worker_category,
+                "email": email,
+                "percentage": result.percentage,
+            }
+            for result, id, email, worker_category, name in results
+        ]
+
+        print(f"Formatted results for category '{category}': {formatted_results}")  # Logging
+
+        all_results.extend(formatted_results)
+
+    return all_results
 
 
 

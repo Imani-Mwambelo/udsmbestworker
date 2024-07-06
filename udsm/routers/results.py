@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
 from sqlalchemy import func
 from .. import models
-from .. import schemas
+from .. import schemas, dependencies
 from ..database import get_db
 from ..authentication import oauth2
 

@@ -1,6 +1,6 @@
 
 from typing import Optional
-from sqlalchemy import Column, Float, ForeignKey, Integer, String, text, Enum, UniqueConstraint
+from sqlalchemy import Column, Float, ForeignKey, Integer, String, DateTime, text, Enum, UniqueConstraint
 from sqlalchemy.sql.sqltypes import TIMESTAMP
 from sqlalchemy.orm import relationship, validates
 
@@ -60,11 +60,36 @@ class Worker(Base):
     category = Column(String, nullable=False)
     unit_id = Column(Integer, ForeignKey('units.id'), nullable=False)
     department_id = Column(Integer, ForeignKey('departments.id'), nullable=True)
-
+    role = Column(String, nullable=False, default="user")
     unit = relationship('Unit', back_populates='workers')
     department = relationship('Department', back_populates='workers')
     
-    
+class NominationPeriod(Base):
+    __tablename__ = 'nomination_periods'
+    id = Column(Integer, primary_key=True, index=True)
+    start_time = Column(DateTime(timezone=True), nullable=False)
+    end_time = Column(DateTime(timezone=True), nullable=False)
+    created_at= Column(TIMESTAMP(timezone=True), nullable=False, server_default=text('now()'))
+
+class VotingPeriod(Base):
+    __tablename__ = 'voting_periods'
+    id = Column(Integer, primary_key=True, index=True)
+    start_time = Column(DateTime(timezone=True), nullable=False)
+    end_time = Column(DateTime(timezone=True), nullable=False)
+    created_at= Column(TIMESTAMP(timezone=True), nullable=False, server_default=text('now()'))
+
+class NominationResultReleasePeriod(Base):
+    __tablename__ = 'nom_result_release_periods'
+    id = Column(Integer, primary_key=True, index=True)
+    release_time = Column(DateTime(timezone=True), nullable=False)
+    created_at= Column(TIMESTAMP(timezone=True), nullable=False, server_default=text('now()'))
+
+class ResultReleasePeriod(Base):
+    __tablename__ = 'result_release_periods'
+    id = Column(Integer, primary_key=True, index=True)
+    release_time = Column(DateTime(timezone=True), nullable=False)
+    created_at= Column(TIMESTAMP(timezone=True), nullable=False, server_default=text('now()'))
+   
 
 
 #sqlalchemy will check if a table exists in the db if yes it will not create them otherwise it will create them but it can not modify existing tables

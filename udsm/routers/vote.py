@@ -3,10 +3,9 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from typing import List
-from .. import models, schemas
+from .. import models, schemas, dependencies
 from udsm.authentication import oauth2
 from ..database import get_db, engine
-from .nomination import compute_results
 
 
 router=APIRouter(tags=['Votes'])
@@ -17,6 +16,7 @@ def create_vote(
     db: Session = Depends(get_db),
     current_user=Depends(oauth2.get_current_user)
 ):
+    dependencies.check_voting_period(db=db)
     # Check if the user has already voted in this category
     vote_exist = db.query(models.Vote).filter_by(voter_id=current_user['id'], category=vote.category).first()
     if vote_exist:
@@ -27,14 +27,19 @@ def create_vote(
     if not votee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Votee is not of {vote.category} category")
     
-    # Compute results to get top workers in the category
-    top_workers = compute_results(db=db, category=vote.category, current_user=current_user)
-    print(top_workers)
-    
-    # Ensure the votee is among the top workers
-    if not any(result['email'] == votee.email for result in top_workers):
+    top_workers = db.query(models.Result,models.Worker.id, models.Worker.email, models.Worker.category, models.Worker.name)\
+                .join(models.Worker, models.Result.worker_id == models.Worker.id, isouter=True)\
+                .filter(
+                    models.Worker.category == vote.category,
+                    models.Worker.department_id == current_user['department_id'],
+                    models.Worker.unit_id == current_user['unit_id']
+                )\
+                .group_by(models.Result.id, models.Result.worker_id,models.Result,models.Worker.id, models.Worker.email, models.Worker.category, models.Worker.name)\
+                .order_by(models.Result.percentage.desc()).limit(3)\
+                .all()
+
+    if not any(result.email == votee.email for result in top_workers):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Votee is not eligible to be voted")
-    
     # Create and save the new vote
     new_vote = models.Vote(**vote.model_dump(), voter_id=current_user['id'], department_id=current_user['department_id'], unit_id=current_user['unit_id'])
     db.add(new_vote)
@@ -75,8 +80,19 @@ def update_vote(vote_id: int, vote: schemas.Vote, db: Session = Depends(get_db),
     if not votee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Votee is not of {vote.category} category")
     
-    top_workers = compute_results(db=db, category=vote.category, current_user=current_user)
-    if not any(result['email'] == votee.email for result in top_workers):
+
+    top_workers = db.query(models.Result,models.Worker.id, models.Worker.email, models.Worker.category, models.Worker.name)\
+                .join(models.Worker, models.Result.worker_id == models.Worker.id, isouter=True)\
+                .filter(
+                    models.Worker.category == vote.category,
+                    models.Worker.department_id == current_user['department_id'],
+                    models.Worker.unit_id == current_user['unit_id']
+                )\
+                .group_by(models.Result.id, models.Result.worker_id,models.Result,models.Worker.id, models.Worker.email, models.Worker.category, models.Worker.name)\
+                .order_by(models.Result.percentage.desc()).limit(3)\
+                .all()
+
+    if not any(result.email == votee.email for result in top_workers):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Votee is not eligible to be voted")
 
     # Update the vote
@@ -100,6 +116,7 @@ def delete_vote(vote_id: int, db: Session = Depends(get_db), current_user=Depend
 
 @router.get("/results")
 def compute_vote_results(db: Session = Depends(get_db), current_user=Depends(oauth2.get_current_user)):
+    
     try:
         # Clear the results table
         db.query(models.VoteResult).delete()

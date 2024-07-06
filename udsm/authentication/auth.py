@@ -8,21 +8,22 @@ from udsm.database import get_db
 router=APIRouter(tags=['Authentication'])
 
 @router.post('/login', response_model=schemas.Token)
-def login(user_cridentials:OAuth2PasswordRequestForm= Depends(), db: Session=Depends(get_db)):
+def login(user_credentials:OAuth2PasswordRequestForm= Depends(), db: Session=Depends(get_db)):
       
 
-      usr=db.query(models.Worker).filter(models.Worker.email==user_cridentials.username).first()
+      usr=db.query(models.Worker).filter(models.Worker.email==user_credentials.username).first()
   
       
       if not usr:     
           raise HTTPException(status_code=status.HTTP_403_FORBIDDEN , detail=f"Invalid cridentials, wrong email or password")
     
-      if not utils.verify(user_cridentials.password,usr.password):
+      if not utils.verify(user_credentials.password,usr.password):
           raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Invalid cridentials, wrong email or password")
     
-      access_token=oauth2.create_access_token(data={"id":usr.id, "category":usr.category, "department_id":usr.department_id,"unit_id":usr.unit_id})
+      access_token=oauth2.create_access_token(data={"id":usr.id, "role":usr.role, "category":usr.category, "department_id":usr.department_id,"unit_id":usr.unit_id})
+      
 
-      return {"access_token":access_token, "token_type":"bearer"}
+      return {"access_token":access_token, "token_type":"bearer", "role":usr.role}
 
 
 
