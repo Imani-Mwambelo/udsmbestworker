@@ -4,9 +4,6 @@ This is a comprehensive backend of the system it built using FastAPI framework w
 Some Main Features of the API
 
 The API includes role based authentication.
-
 It allow workers to nominate each other
-
 It allow workers to vote for each other
-
 It computes results in all level of the organizaton from department to the University level
